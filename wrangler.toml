@@ -1,0 +1,5 @@
+[env.production.vars]
+ONE_MIN_API_URL = "https://api.1min.ai/api/features"
+ONE_MIN_CONVERSATION_API_URL = "https://api.1min.ai/api/conversations"
+ONE_MIN_CONVERSATION_API_STREAMING_URL = "https://api.1min.ai/api/features?isStreaming=true"
+ONE_MIN_ASSET_URL = "https://api.1min.ai/api/assets"
