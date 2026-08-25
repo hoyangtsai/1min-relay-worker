@@ -6,45 +6,25 @@ A TypeScript implementation of the 1min.ai API relay service, designed to run on
 
 ## Features
 
-- **Complete API Relay**: Full compatibility with 1min.ai chat completions, responses, and image generation endpoints
+- **Complete API Relay**: Full compatibility with 1min.ai chat completions, responses, image generation, and audio transcription/translation endpoints
 - **OpenAI Responses API**: Structured outputs with JSON objects, JSON schema, and reasoning effort control
 - **Distributed Rate Limiting**: Uses Cloudflare KV for consistent rate limiting across multiple worker instances
 - **Accurate Token Counting**: Integrated with `gpt-tokenizer` for precise token calculation across all models
-- **60+ AI Models**: Supports all latest models including GPT-4o, Claude 3.5, Mistral, Flux, Leonardo.ai, and more
+- **Dynamic Model List**: Model data fetched live from the 1min.ai API with two-tier caching (in-memory + KV), always up to date
 - **Streaming Support**: Real-time streaming responses for chat completions
 - **TypeScript**: Full type safety and modern development experience
 - **Vision Support**: Supports image input for vision models
+- **Audio Transcription & Translation**: OpenAI Whisper-compatible speech-to-text and audio translation endpoints
 
 ## Supported Models
 
-### Text Generation Models
+Model data is fetched dynamically from the 1min.ai API and cached with a two-tier strategy (in-memory 5 min, KV 1 hr). The `GET /v1/models` endpoint always returns the latest available models. Use it to see the full list:
 
-- **OpenAI**: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-chat-latest, o1, o1-mini, o3-mini, o4-mini, gpt-4.5-preview, gpt-4.1, gpt-4.1-nano, gpt-4.1-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo, openai/gpt-oss-20b, openai/gpt-oss-120b, and more
-- **Claude**: claude-3-5-sonnet, claude-3-5-haiku, claude-3-7-sonnet, claude-sonnet-4, claude-opus-4, claude-3-opus, claude-3-haiku
-- **MistralAI**: mistral-large-latest, mistral-small-latest, pixtral-12b
-- **GoogleAI**: gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-preview-05-20, gemini-2.5-flash-preview-04-17, gemini-2.5-pro-preview-05-06
-- **DeepSeek**: deepseek-chat, deepseek-reasoner
-- **Meta**: llama-2-70b-chat, meta-llama-3.1-405b-instruct, llama-4-maverick-instruct, llama-4-scout-instruct
-- **xAI**: grok-2, grok-3, grok-3-mini, grok-4-0709, grok-4-fast-reasoning, grok-4-fast-non-reasoning
-- **Perplexity Sonar**: sonar-reasoning-pro, sonar-reasoning, sonar-pro, sonar
+```bash
+curl https://your-worker.your-subdomain.workers.dev/v1/models
+```
 
-### Vision Models (Image Input Support)
-
-- **OpenAI**: gpt-5, gpt-5-mini, gpt-5-chat-latest, gpt-4o, gpt-4o-mini, gpt-4-turbo
-- **xAI**: grok-4-fast-reasoning, grok-4-fast-non-reasoning
-
-### Image Generation Models
-
-- **DALL-E**: dall-e-2, dall-e-3
-- **Midjourney**: midjourney, midjourney_6_1
-- **Leonardo.ai**: phoenix, lightning-xl, anime-xl, diffusion-xl, kino-xl, vision-xl, albedo-base-xl
-- **Flux**: flux-schnell, flux-dev, flux-pro, flux-1.1-pro
-- **Stable Diffusion**: stable-diffusion-xl-1024-v1-0, stable-diffusion-v1-6
-
-### Speech Models
-
-- **Speech-to-Text**: whisper-1
-- **Text-to-Speech**: tts-1, tts-1-hd
+Capabilities such as vision, code interpreter, and web search are derived automatically from the API response — no hardcoded model lists.
 
 ## API Endpoints
 
@@ -174,13 +154,66 @@ curl -X POST http://localhost:8787/v1/responses \
 - **Structured Outputs**: JSON objects and JSON schema validation
 - **Reasoning Effort**: Control reasoning depth (low, medium, high)
 - **Vision Support**: Same image input capabilities as Chat Completions
-- **No Streaming**: Responses API returns complete responses only
+- **Streaming Support**: Full OpenAI-compatible SSE streaming with `response.completed` terminal event
 - **Enhanced Prompting**: Automatically optimizes prompts for structured responses
 
 ### Image Generation
 
 ```
 POST /v1/images/generations
+```
+
+### Audio Transcription (Speech-to-Text)
+
+```
+POST /v1/audio/transcriptions
+```
+
+Transcribe audio to text using Whisper or Google Speech models. Accepts `multipart/form-data`.
+
+```bash
+curl -X POST http://localhost:8787/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@audio.mp3" \
+  -F "model=whisper-1"
+```
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | File | Yes | Audio file (mp3, mp4, m4a, wav, webm, ogg, flac). Max 25MB. |
+| `model` | string | Yes | Model ID (e.g., `whisper-1`, `latest_long`, `latest_short`) |
+| `language` | string | No | Language hint (ISO-639-1 for Whisper, BCP-47 for Google Speech) |
+| `prompt` | string | No | Prompt to guide transcription style |
+| `response_format` | string | No | `json` (default), `text`, `verbose_json`, `srt`, `vtt` |
+| `temperature` | number | No | 0–1 sampling temperature |
+
+**OpenAI SDK:**
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8787/v1", api_key="YOUR_API_KEY")
+transcript = client.audio.transcriptions.create(
+    model="whisper-1",
+    file=open("audio.mp3", "rb"),
+)
+print(transcript.text)
+```
+
+### Audio Translation
+
+```
+POST /v1/audio/translations
+```
+
+Translate audio to English text. Same parameters as transcription (except `language`).
+
+```bash
+curl -X POST http://localhost:8787/v1/audio/translations \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@foreign-audio.mp3" \
+  -F "model=whisper-1"
 ```
 
 ### List Models
@@ -200,14 +233,16 @@ Returns information about all available endpoints:
 - Chat Completions: `/v1/chat/completions`
 - Responses: `/v1/responses`
 - Image Generation: `/v1/images/generations`
+- Audio Transcription: `/v1/audio/transcriptions`
+- Audio Translation: `/v1/audio/translations`
 - Models: `/v1/models`
 
 ## Rate Limiting
 
 The worker implements distributed rate limiting with the following limits:
 
-- **Requests per minute**: 60 per IP address
-- **Tokens per minute**: 10,000 per IP address
+- **Requests per minute**: 180 per IP address
+- **Tokens per minute**: 100,000 per IP address
 
 Rate limits are enforced using Cloudflare KV storage, ensuring consistency across all worker instances.
 
@@ -234,29 +269,35 @@ cd 1min-relay-worker
 npm install
 ```
 
-3. Configure environment variables in `wrangler.toml`:
+3. Configure environment variables in `wrangler.jsonc`:
 
-```toml
-[env.production.vars]
-ONE_MIN_API_URL = "https://api.1min.ai/api/features"
-ONE_MIN_CONVERSATION_API_URL = "https://api.1min.ai/api/conversations"
-ONE_MIN_CONVERSATION_API_STREAMING_URL = "https://api.1min.ai/api/features?isStreaming=true"
-ONE_MIN_ASSET_URL = "https://api.1min.ai/api/assets"
+```jsonc
+"vars": {
+  "ONE_MIN_CHAT_API_URL": "https://api.1min.ai/api/chat-with-ai",
+  "ONE_MIN_API_URL": "https://api.1min.ai/api/features",
+  "ONE_MIN_ASSET_URL": "https://api.1min.ai/api/assets",
+  "ONE_MIN_MODELS_API_URL": "https://api.1min.ai/models"
+}
 ```
 
-4. Create KV namespace for rate limiting:
+4. Create KV namespaces:
 
 ```bash
 wrangler kv:namespace create "RATE_LIMIT_STORE"
+wrangler kv:namespace create "MODEL_CACHE"
 ```
 
-5. After running the command above, you'll receive a KV namespace ID. Copy this ID and replace `[your-kv-namespace-id]` in your `wrangler.jsonc` or `wrangler.toml` file:
+5. After running the commands above, you'll receive a KV namespace ID for each. Copy the IDs and update `wrangler.jsonc`:
 
 ```jsonc
 "kv_namespaces": [
   {
     "binding": "RATE_LIMIT_STORE",
-    "id": "your-kv-namespace-id-here" // Replace this with the ID from step 4
+    "id": "your-rate-limit-kv-id-here"
+  },
+  {
+    "binding": "MODEL_CACHE",
+    "id": "your-model-cache-kv-id-here"
   }
 ]
 ```
@@ -329,14 +370,15 @@ If you encounter issues during deployment:
 
 The following environment variables are configured in `wrangler.jsonc`:
 
-- `ONE_MIN_API_URL`: 1min.ai API endpoint for features
-- `ONE_MIN_CONVERSATION_API_URL`: 1min.ai conversation API endpoint
-- `ONE_MIN_CONVERSATION_API_STREAMING_URL`: 1min.ai streaming API endpoint
-- `ONE_MIN_ASSET_URL`: 1min.ai asset API endpoint
+- `ONE_MIN_CHAT_API_URL`: 1min.ai unified chat endpoint (`/api/chat-with-ai`)
+- `ONE_MIN_API_URL`: 1min.ai features endpoint for non-chat features like image generation (`/api/features`)
+- `ONE_MIN_ASSET_URL`: 1min.ai asset upload endpoint
+- `ONE_MIN_MODELS_API_URL`: 1min.ai models API endpoint (for dynamic model list)
 
-### KV Namespace
+### KV Namespaces
 
 - `RATE_LIMIT_STORE`: Used for distributed rate limiting storage
+- `MODEL_CACHE`: Used for caching model data fetched from the 1min.ai API (1 hour TTL)
 
 ## Usage Examples
 
@@ -383,6 +425,16 @@ curl -X POST https://your-worker.your-subdomain.workers.dev/v1/images/generation
   }'
 ```
 
+### Audio Transcription
+
+```bash
+curl -X POST https://your-worker.your-subdomain.workers.dev/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@recording.mp3" \
+  -F "model=whisper-1" \
+  -F "response_format=text"
+```
+
 ### Streaming Chat
 
 ```bash
@@ -402,7 +454,7 @@ The worker is built with:
 
 - **TypeScript**: For type safety and better development experience
 - **Cloudflare Workers**: Serverless edge computing platform
-- **Cloudflare KV**: Distributed key-value storage for rate limiting
+- **Cloudflare KV**: Distributed key-value storage for rate limiting and model data caching
 - **gpt-tokenizer**: Accurate token counting for all supported models
 
 ## Rate Limiting Implementation

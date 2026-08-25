@@ -17,7 +17,7 @@ export class ValidationError extends Error {
 }
 
 export class AuthenticationError extends Error {
-  public readonly type = "invalid_request_error";
+  public readonly type = "authentication_error";
   public readonly code = "invalid_api_key";
   public readonly param = "authorization";
   public readonly status = 401;
@@ -91,10 +91,10 @@ export function toOpenAIError(error: unknown): {
     };
   }
 
-  // Default error handling
+  // Default error handling — never leak internal details to clients
   if (error instanceof Error) {
     return {
-      message: error.message,
+      message: "An internal error occurred",
       type: "api_error",
       param: null,
       code: null,
@@ -107,6 +107,70 @@ export function toOpenAIError(error: unknown): {
     type: "api_error",
     param: null,
     code: null,
+    status: 500,
+  };
+}
+
+/**
+ * Converts an error to Anthropic API error format
+ */
+export function toAnthropicError(error: unknown): {
+  type: string;
+  message: string;
+  status: number;
+} {
+  if (error instanceof AuthenticationError) {
+    return {
+      type: "authentication_error",
+      message: error.message,
+      status: 401,
+    };
+  }
+
+  if (error instanceof RateLimitError) {
+    return {
+      type: "rate_limit_error",
+      message: error.message,
+      status: 429,
+    };
+  }
+
+  if (error instanceof ModelNotFoundError) {
+    return {
+      type: "not_found_error",
+      message: error.message,
+      status: 404,
+    };
+  }
+
+  if (error instanceof ValidationError) {
+    return {
+      type: "invalid_request_error",
+      message: error.message,
+      status: 400,
+    };
+  }
+
+  if (error instanceof ApiError) {
+    return {
+      type: "api_error",
+      message: error.message,
+      status: error.status,
+    };
+  }
+
+  // Never leak internal details to clients
+  if (error instanceof Error) {
+    return {
+      type: "api_error",
+      message: "An internal error occurred",
+      status: 500,
+    };
+  }
+
+  return {
+    type: "api_error",
+    message: "An unknown error occurred",
     status: 500,
   };
 }

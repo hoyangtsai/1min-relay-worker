@@ -2,7 +2,7 @@
  * Response type definitions for API endpoints
  */
 
-export interface OneMinResponse {
+export interface OneMinChatResponse {
   requestId?: string;
   content?: string;
   aiRecord?: {
@@ -27,9 +27,9 @@ export interface OneMinImageResponse {
 }
 
 export interface RateLimitRecord {
-  timestamps: number[];
+  requestCount: number;
   tokenCount: number;
-  windowStart?: number;
+  windowStart: number;
 }
 
 export interface RateLimitConfig {

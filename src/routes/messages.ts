@@ -1,16 +1,16 @@
 import { Hono } from "hono";
-import { ResponseHandler } from "../handlers";
+import { MessagesHandler } from "../handlers/messages";
 import { authMiddleware } from "../middleware/auth";
 import { createRateLimitMiddleware } from "../middleware/rate-limit-hono";
-import type { ResponseRequest } from "../types";
+import type { AnthropicMessageRequest } from "../types";
 import type { HonoEnv } from "../types/hono";
-import { calculateResponseRequestTokens } from "../utils";
+import { calculateAnthropicRequestTokens } from "../utils";
 import { ValidationError } from "../utils/errors";
 
 const app = new Hono<HonoEnv>();
 
 app.post("/", authMiddleware, async (c) => {
-  let body: ResponseRequest;
+  let body: AnthropicMessageRequest;
   try {
     body = await c.req.json();
   } catch {
@@ -20,12 +20,12 @@ app.post("/", authMiddleware, async (c) => {
   const apiKey = c.get("apiKey");
 
   const rateLimitMiddleware = createRateLimitMiddleware(
-    calculateResponseRequestTokens(body),
+    calculateAnthropicRequestTokens(body),
   );
   await rateLimitMiddleware(c, async () => {});
 
-  const responseHandler = new ResponseHandler(c.env);
-  const response = await responseHandler.handleResponsesWithBody(body, apiKey);
+  const messagesHandler = new MessagesHandler(c.env);
+  const response = await messagesHandler.handleMessages(body, apiKey);
 
   return new Response(response.body, {
     status: response.status,
