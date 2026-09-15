@@ -9,16 +9,17 @@ import type {
   Message,
   OneMinChatResponse,
   ResponseFormat,
-  ResponseInputItem,
   ResponseRequest,
   ResponsesAPIResponse,
   ResponsesOutputMessage,
 } from "../types";
 import {
   calculateTokens,
+  convertInputToMessages,
   createSuccessResponse,
   estimateInputTokens,
   extractOneMinContent,
+  extractOneMinUsage,
   ValidationError,
   validateModelAndMessages,
   type WebSearchConfig,
@@ -26,6 +27,14 @@ import {
 import { writeSSEDone, writeSSEEventWithType } from "../utils/sse";
 import { executeStreamingPipeline } from "../utils/streaming";
 import { BaseTextHandler } from "./base";
+
+/** Keyed by string, not the enum: clients are not obliged to send a valid one. */
+const EFFORT_INSTRUCTIONS: Record<string, string> = {
+  low: "Provide a direct and concise response.",
+  medium:
+    "Think through the problem step by step and provide a well-reasoned response.",
+  high: "Carefully analyze all aspects of the problem, consider multiple perspectives, and provide a thoroughly reasoned response with detailed explanations.",
+};
 
 export class ResponseHandler extends BaseTextHandler {
   async handleResponsesWithBody(
@@ -46,7 +55,7 @@ export class ResponseHandler extends BaseTextHandler {
     // Convert input format to messages format
     let messages: Message[];
     if (requestBody.input) {
-      messages = this.convertInputToMessages(
+      messages = convertInputToMessages(
         requestBody.input,
         requestBody.instructions,
       );
@@ -87,41 +96,6 @@ export class ResponseHandler extends BaseTextHandler {
     );
   }
 
-  private convertInputToMessages(
-    input: string | ResponseInputItem[],
-    instructions?: string,
-  ): Message[] {
-    const messages: Message[] = [];
-
-    // Add instructions as system message
-    if (instructions) {
-      messages.push({ role: "system", content: instructions });
-    }
-
-    if (typeof input === "string") {
-      messages.push({ role: "user", content: input });
-    } else {
-      // Array of input items
-      for (const item of input) {
-        if (item.type === "message") {
-          const content =
-            typeof item.content === "string"
-              ? item.content
-              : item.content
-                  .filter(
-                    (c): c is typeof c & { text: string } =>
-                      c.type === "text" && !!c.text,
-                  )
-                  .map((c) => c.text)
-                  .join("\n");
-          messages.push({ role: item.role, content });
-        }
-      }
-    }
-
-    return messages;
-  }
-
   private async handleNonStreamingResponse(
     messages: Message[],
     model: string,
@@ -147,6 +121,7 @@ export class ResponseHandler extends BaseTextHandler {
       data,
       model,
       responseFormat,
+      enhancedMessages,
     );
     return createSuccessResponse(responsesAPIResponse);
   }
@@ -284,64 +259,73 @@ export class ResponseHandler extends BaseTextHandler {
     responseFormat?: ResponseFormat,
     reasoningEffort?: ResponseRequest["reasoning_effort"],
   ): Message[] {
-    const enhancedMessages = [...messages];
+    // `reasoning_effort` and `response_format` are independent fields: a
+    // request may carry either on its own, and the effort instruction used to
+    // be dropped whenever no response_format came with it.
+    const instructions: string[] = [];
 
     if (responseFormat) {
-      let structurePrompt = "";
-
       switch (responseFormat.type) {
         case "json_object":
-          structurePrompt =
-            "Please respond with a valid JSON object only. Do not include any text outside the JSON structure.";
+          instructions.push(
+            "Please respond with a valid JSON object only. Do not include any text outside the JSON structure.",
+          );
           break;
         case "json_schema":
           if (responseFormat.json_schema) {
-            structurePrompt = `Please respond with a valid JSON object that strictly follows this schema: ${JSON.stringify(responseFormat.json_schema.schema)}. The response should be named "${responseFormat.json_schema.name}". ${responseFormat.json_schema.description || ""}`;
+            instructions.push(
+              `Please respond with a valid JSON object that strictly follows this schema: ${JSON.stringify(responseFormat.json_schema.schema)}. The response should be named "${responseFormat.json_schema.name}". ${responseFormat.json_schema.description || ""}`,
+            );
           }
           break;
         default:
-          structurePrompt =
-            "Please provide a clear and structured text response.";
+          instructions.push(
+            "Please provide a clear and structured text response.",
+          );
           break;
       }
+    }
 
-      if (reasoningEffort) {
-        const effortInstructions: Record<string, string> = {
-          low: "Provide a direct and concise response.",
-          medium:
-            "Think through the problem step by step and provide a well-reasoned response.",
-          high: "Carefully analyze all aspects of the problem, consider multiple perspectives, and provide a thoroughly reasoned response with detailed explanations.",
-        };
-        structurePrompt += ` ${effortInstructions[reasoningEffort]}`;
+    if (reasoningEffort) {
+      // Looked up, not interpolated: an out-of-enum value from an untyped
+      // client would otherwise append the literal "undefined" to the prompt.
+      const effort = EFFORT_INSTRUCTIONS[reasoningEffort];
+      if (effort) {
+        instructions.push(effort);
       }
+    }
 
-      const systemMessageIndex = enhancedMessages.findIndex(
-        (msg) => msg.role === "system",
-      );
-      const existing = enhancedMessages[systemMessageIndex];
-      if (systemMessageIndex >= 0 && existing) {
-        const existingText =
-          typeof existing.content === "string"
+    if (instructions.length === 0) {
+      return messages;
+    }
+
+    const structurePrompt = instructions.join(" ");
+    const enhancedMessages = [...messages];
+    const systemMessageIndex = enhancedMessages.findIndex(
+      (msg) => msg.role === "system",
+    );
+    const existing = enhancedMessages[systemMessageIndex];
+    if (systemMessageIndex >= 0 && existing) {
+      const existingText =
+        typeof existing.content === "string"
+          ? existing.content
+          : Array.isArray(existing.content)
             ? existing.content
-            : Array.isArray(existing.content)
-              ? existing.content
-                  .filter(
-                    (c): c is { type: "text"; text: string } =>
-                      c.type === "text",
-                  )
-                  .map((c) => c.text)
-                  .join("\n")
-              : "";
-        enhancedMessages[systemMessageIndex] = {
-          role: existing.role,
-          content: `${existingText}\n\n${structurePrompt}`,
-        };
-      } else {
-        enhancedMessages.unshift({
-          role: "system",
-          content: structurePrompt,
-        });
-      }
+                .filter(
+                  (c): c is { type: "text"; text: string } => c.type === "text",
+                )
+                .map((c) => c.text)
+                .join("\n")
+            : "";
+      enhancedMessages[systemMessageIndex] = {
+        role: existing.role,
+        content: `${existingText}\n\n${structurePrompt}`,
+      };
+    } else {
+      enhancedMessages.unshift({
+        role: "system",
+        content: structurePrompt,
+      });
     }
 
     return enhancedMessages;
@@ -351,6 +335,7 @@ export class ResponseHandler extends BaseTextHandler {
     data: OneMinChatResponse,
     model: string,
     responseFormat?: ResponseFormat,
+    messages: Message[] = [],
   ): ResponsesAPIResponse {
     let content = extractOneMinContent(data);
 
@@ -370,6 +355,14 @@ export class ResponseHandler extends BaseTextHandler {
 
     const messageId = `msg-${crypto.randomUUID()}`;
 
+    // Prefer the upstream's own accounting (aiRecord.metadata) over a local
+    // estimate; the relay used to read a `usage` field the upstream never
+    // sends, so every response reported zero tokens.
+    const usage = extractOneMinUsage(data);
+    const inputTokens = usage?.promptTokens ?? estimateInputTokens(messages);
+    const outputTokens =
+      usage?.completionTokens ?? calculateTokens(content, model);
+
     return {
       id: `resp-${crypto.randomUUID()}`,
       object: "response",
@@ -386,9 +379,9 @@ export class ResponseHandler extends BaseTextHandler {
       ],
       status: "completed",
       usage: {
-        input_tokens: data.usage?.prompt_tokens || 0,
-        output_tokens: data.usage?.completion_tokens || 0,
-        total_tokens: data.usage?.total_tokens || 0,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: usage?.totalTokens ?? inputTokens + outputTokens,
       },
     };
   }
